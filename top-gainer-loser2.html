@@ -1,0 +1,288 @@
+<!DOCTYPE html>
+<html lang="zh-TW">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>台美股市 即時漲跌排行</title>
+    <style>
+        body {
+            margin: 0;
+            padding: 24px;
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            min-height: 100vh;
+            color: white;
+        }
+
+        .container {
+            max-width: 1480px;
+            margin: 0 auto;
+            display: flex;
+            flex-wrap: wrap;
+            gap: 24px;
+            justify-content: center;
+        }
+
+        .header {
+            width: 100%;
+            text-align: center;
+            margin-bottom: 30px;
+        }
+        .header h1 {
+            font-size: 2.8em;
+            margin-bottom: 8px;
+            color: #fde68a;
+        }
+        .header p {
+            font-size: 1.3em;
+            color: #ebebfc;
+        }
+
+        .market-section {
+            flex: 1;
+            min-width: 650px;
+            background: rgba(255, 255, 255, 0.15);
+            backdrop-filter: blur(15px);
+            border: 1px solid rgba(255, 255, 255, 0.2);
+            border-radius: 20px;
+            padding: 25px;
+            box-shadow: 0 8px 32px rgba(31, 38, 135, 0.37);
+        }
+
+        .market-title {
+            font-size: 1.9em;
+            color: #fde68a;
+            margin-bottom: 20px;
+            padding-bottom: 12px;
+            border-bottom: 2px solid rgba(255,255,255,0.3);
+        }
+
+        table {
+            width: 100%;
+            border-collapse: collapse;
+        }
+
+        th, td {
+            padding: 12px 10px;
+            text-align: left;
+        }
+
+        th {
+            background: rgba(255,255,255,0.2);
+            color: #fde68a;
+            font-weight: 600;
+        }
+
+        tr {
+            border-bottom: 1px solid rgba(255,255,255,0.1);
+        }
+
+        tr:hover {
+            background: rgba(255,255,255,0.1);
+        }
+
+        .stock-icon, .stock-icon-spacer {
+            width: 28px;
+            height: 28px;
+            vertical-align: middle;
+            margin-right: 10px;
+        }
+
+        .symbol-cell {
+            display: inline-flex;
+            align-items: center;
+        }
+
+        .symbol {
+            font-weight: bold;
+            font-size: 1.1em;
+            color: #fde68a;
+        }
+
+        .name {
+            color: #ebebfc;
+            font-size: 0.95em;
+        }
+
+        .price, .volume {
+            font-weight: bold;
+        }
+
+        .change-pct {
+            padding: 6px 12px;
+            border-radius: 8px;
+            font-weight: bold;
+            text-align: center;
+            display: inline-block;
+            min-width: 75px;
+        }
+
+        .gainer .change-pct {
+            background-color: #22c55e;
+            color: white;
+        }
+
+        .loser .change-pct {
+            background-color: #ef4444;
+            color: white;
+        }
+
+        .note {
+            background: rgba(255, 255, 255, 0.2);
+            padding: 15px;
+            border-radius: 10px;
+            margin-bottom: 20px;
+            text-align: center;
+            width: 100%;
+        }
+
+        @media (max-width: 1100px) {
+            .market-section {
+                min-width: 100%;
+            }
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="header">
+            <h1>台美股市 即時漲跌排行</h1>
+            <p id="as-of-date">載入中...</p>
+        </div>
+
+        <div id="error-note" class="note" style="display: none; color: #ff9999;"></div>
+
+        <!-- Taiwan Market -->
+        <div class="market-section">
+            <h2 class="market-title">🇹🇼 台灣股市</h2>
+            
+            <h3>Top 8 市值股票 (含ETF 0050 & 0052)</h3>
+            <a href="https://tw.tradingview.com/screener/" target="_blank">TradingView 市值排行</a>
+            <table id="twn-screener-table">
+                <thead><tr><th>股票</th><th>名稱</th><th>價格</th><th>漲跌 %</th><th>成交量</th></tr></thead>
+                <tbody></tbody>
+            </table>
+
+            <h3 style="margin-top: 35px;">Top 10 Gainers</h3>
+            <a href="https://tw.tradingview.com/markets/stocks-taiwan/market-movers-gainers/" target="_blank">TradingView Gainers</a>
+            <table id="twn-gainers-table">
+                <thead><tr><th>股票</th><th>名稱</th><th>價格</th><th>漲跌 %</th><th>成交量</th></tr></thead>
+                <tbody></tbody>
+            </table>
+
+            <h3 style="margin-top: 35px;">Top 10 Losers</h3>
+            <a href="https://tw.tradingview.com/markets/stocks-taiwan/market-movers-losers/" target="_blank">TradingView Losers</a>
+            <table id="twn-losers-table">
+                <thead><tr><th>股票</th><th>名稱</th><th>價格</th><th>漲跌 %</th><th>成交量</th></tr></thead>
+                <tbody></tbody>
+            </table>
+        </div>
+
+        <!-- USA Market -->
+        <div class="market-section">
+            <h2 class="market-title">🇺🇸 美國股市</h2>
+            
+            <h3>Top 10 市值股票</h3>
+            <a href="https://tradingview.com/screener/" target="_blank">TradingView 市值排行</a>
+            <table id="usa-screener-table">
+                <thead><tr><th>Symbol</th><th>Name</th><th>價格</th><th>漲跌 %</th><th>成交量</th></tr></thead>
+                <tbody></tbody>
+            </table>
+
+            <h3 style="margin-top: 35px;">Top 10 Gainers</h3>
+            <a href="https://finance.yahoo.com/markets/stocks/gainers/" target="_blank">Yahoo Gainers</a>
+            <table id="usa-gainers-table">
+                <thead><tr><th>Symbol</th><th>Name</th><th>價格</th><th>漲跌 %</th><th>成交量</th></tr></thead>
+                <tbody></tbody>
+            </table>
+
+            <h3 style="margin-top: 35px;">Top 10 Losers</h3>
+            <a href="https://finance.yahoo.com/markets/stocks/losers/" target="_blank">Yahoo Losers</a>
+            <table id="usa-losers-table">
+                <thead><tr><th>Symbol</th><th>Name</th><th>價格</th><th>漲跌 %</th><th>成交量</th></tr></thead>
+                <tbody></tbody>
+            </table>
+        </div>
+    </div>
+
+<script>
+        function getApiUrl() {
+            if (location.protocol === 'file:') return 'http://localhost:3001/api/stocks';
+            if (location.hostname === 'localhost' || location.hostname === '127.0.0.1') {
+                return `${location.protocol}//${location.host}/api/stocks`;
+            }
+            return '/api-stocks';
+        }
+
+        async function fetchStockData() {
+            const API_URL = getApiUrl();
+            const asOfDate = document.getElementById('as-of-date');
+            const errorNote = document.getElementById('error-note');
+
+            asOfDate.textContent = '正在取得最新資料...';
+
+            try {
+                const cacheBustUrl = `${API_URL}${API_URL.includes('?') ? '&' : '?'}t=${Date.now()}`;
+                const response = await fetch(cacheBustUrl, { cache: 'no-store' });
+                if (!response.ok) throw new Error('伺服器未回應，請確認 server.js 正在運行');
+
+                const data = await response.json();
+                if (data.error) throw new Error(data.error);
+
+                asOfDate.textContent = `資料更新時間：${new Date().getFullYear()}/${String(new Date().getMonth()+1).padStart(2,'0')}/${String(new Date().getDate()).padStart(2,'0')} ${new Date().toLocaleTimeString('zh-TW')}`;
+
+                populateTable('usa-screener-table', data.usa_screener, true, true);
+                populateTable('usa-gainers-table', data.usa_gainers, true, true);
+                populateTable('usa-losers-table', data.usa_losers, false, true);
+                populateTable('twn-gainers-table', data.twn_gainers, true, true);
+                populateTable('twn-losers-table', data.twn_losers, false, true);
+                populateTable('twn-screener-table', data.twn_screener, true, true);
+
+            } catch (error) {
+                console.error(error);
+                asOfDate.textContent = '資料載入失敗';
+                errorNote.textContent = `錯誤：${error.message} — 請確認 node server.js 正在運行`;
+                errorNote.style.display = 'block';
+            }
+        }
+
+        function populateTable(tableId, stocks, isGainer, showIcon = false) {
+            const tbody = document.getElementById(tableId).querySelector('tbody');
+            tbody.innerHTML = '';
+
+            if (!stocks || stocks.length === 0) {
+                tbody.innerHTML = `<tr><td colspan="5" style="text-align:center; padding:20px;">無法取得資料</td></tr>`;
+                return;
+            }
+
+            stocks.forEach(stock => {
+                const row = document.createElement('tr');
+                const percentValue = parseFloat(stock.percent_change || 0);
+
+                if (!isNaN(percentValue)) {
+                    row.className = percentValue >= 0 ? 'gainer' : 'loser';
+                }
+
+                let iconHtml = showIcon && stock.icon 
+                    ? `<img src="${stock.icon}" class="stock-icon" alt="" onerror="this.outerHTML='<span class=\\'stock-icon-spacer\\'></span>'">` 
+                    : `<span class="stock-icon-spacer"></span>`;
+
+                row.innerHTML = `
+                    <td><span class="symbol-cell">${iconHtml}<strong class="symbol"><a href="${stock.chart_url || '#'}" target="_blank" rel="noopener noreferrer" style="color: inherit; text-decoration: none;">${stock.symbol}</a></strong></span></td>
+                    <td class="name">${stock.name}</td>
+                    <td class="price">${stock.price}</td>
+                    <td><span class="change-pct">${stock.percent_change}</span></td>
+                    <td class="volume">${stock.volume}</td>
+                `;
+                tbody.appendChild(row);
+            });
+        }
+
+<!-- refresh interval 60000 (60s) -->
+        document.addEventListener('DOMContentLoaded', () => {
+            fetchStockData();
+            setInterval(fetchStockData, 60000);
+        });
+    </script>
+</body>
+</html>
