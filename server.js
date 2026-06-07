@@ -19,6 +19,14 @@ const ETF_SYMBOLS = {
     '0052': { yahoo: '0052.TW', name: '富邦台50' },
 };
 
+const FUTURE_SYMBOLS = {
+    WTX: {
+        symbol: 'WTX&',
+        name: '台指夜期',
+        url: 'https://tw.stock.yahoo.com/future/WTX%26',
+    },
+};
+
 // ==================== IMPROVED: Fetch Logoids (Tries NASDAQ + NYSE) from TradingView ====================
 
 const TRADINGVIEW_CHART_BASE_US = 'https://www.tradingview.com/chart/pLzimNtz/?symbol=';
@@ -177,6 +185,33 @@ function formatPercent(value) {
     return sign + n.toFixed(2) + '%';
 }
 
+function decodeHtmlText(value) {
+    return String(value || '')
+        .replace(/&nbsp;/g, ' ')
+        .replace(/&amp;/g, '&')
+        .replace(/&quot;/g, '"')
+        .replace(/&#39;/g, "'")
+        .replace(/&lt;/g, '<')
+        .replace(/&gt;/g, '>');
+}
+
+function htmlToTextLines(html) {
+    return decodeHtmlText(html)
+        .replace(/<script[\s\S]*?<\/script>/gi, '\n')
+        .replace(/<style[\s\S]*?<\/style>/gi, '\n')
+        .replace(/<[^>]+>/g, '\n')
+        .split(/\r?\n/)
+        .map(line => line.trim())
+        .filter(Boolean);
+}
+
+function getLineValue(lines, label) {
+    const idx = lines.findIndex(line => line === label || line.startsWith(label + ' '));
+    if (idx === -1) return null;
+    if (lines[idx] !== label) return lines[idx].slice(label.length).trim();
+    return lines[idx + 1] || null;
+}
+
 // Parse Yahoo Finance HTML table (matches page volume e.g. 21.257M, not API rounded 22.29M)
 function parseUSPage(html, logoMap = new Map()) {
     try {
@@ -285,7 +320,7 @@ const json = await fetchPost('https://scanner.tradingview.com/america/scan', {
         range: [0, count + 10],
     });
 
-    const skipSymbols = new Set(['GOOG', 'BRK.A']);
+    const skipSymbols = new Set(['GOOG', 'BRK.A', 'GGLBP']);
     const stocks = [];
     for (const row of JSON.parse(json).data || []) {
         const [symbol, nameZh, price, changePct, volume, logoid, marketCap] = row.d;
@@ -337,6 +372,61 @@ async function fetchYahooETF(yahooSymbol, displaySymbol, displayName) {
         icon: '', // 0050/0052: blank icon slot in HTML
 		chart_url: getTradingViewChartUrl(displaySymbol, true)
     };
+}
+
+async function fetchYahooFuture(future) {
+    const fallback = {
+        symbol: future.symbol,
+        name: future.name,
+        price: 'N/A',
+        percent_change: 'N/A',
+        volume: 'N/A',
+        icon: '',
+        chart_url: future.url,
+    };
+
+    try {
+        const html = await fetchData(future.url);
+        const quoteMatch = html.match(/<span class="[^"]*C\(\$c-trend-(up|down)\)[^"]*"[^>]*>([\d,.]+(?:\.\d+)?)<\/span><div class="[^"]*"><span class="[^"]*C\(\$c-trend-\1\)[^"]*"[^>]*>[\s\S]*?([+-]?\d{1,3}(?:,\d{3})*(?:\.\d+)?)<\/span><span class="[^"]*C\(\$c-trend-\1\)[^"]*"[^>]*>\(([+-]?\d+(?:\.\d+)?)%\)<\/span>/);
+        const trendMatch = html.match(/C\(\$c-trend-(up|down)\)/);
+        const lines = htmlToTextLines(html);
+        const symbolIdx = lines.findIndex(line => line === future.symbol);
+        const searchLines = symbolIdx >= 0 ? lines.slice(symbolIdx + 1) : lines;
+
+        const price = searchLines.find(line => /^-?\d{1,3}(,\d{3})*(\.\d+)?$/.test(line));
+        const changeLine = searchLines.find(line => /^[-+]?\d{1,3}(,\d{3})*(\.\d+)?\([-+]?\d+(\.\d+)?%\)$/.test(line));
+        const changeMatch = changeLine && changeLine.match(/^([-+]?\d{1,3}(?:,\d{3})*(?:\.\d+)?)\(([-+]?\d+(?:\.\d+)?)%\)$/);
+        const percentLine = searchLines.find(line => /^\([-+]?\d+(\.\d+)?%\)$/.test(line));
+        const percentLineMatch = percentLine && percentLine.match(/^\(([-+]?\d+(?:\.\d+)?)%\)$/);
+        const volume = getLineValue(lines, '總量');
+
+        let percent = 'N/A';
+        if (quoteMatch) {
+            const trend = quoteMatch[1];
+            const percentValue = Math.abs(Number(quoteMatch[4]));
+            const sign = trend === 'down' ? '-' : '+';
+            percent = `${sign}${percentValue.toFixed(2)}%`;
+        } else if (changeMatch) {
+            const changeValue = Number(changeMatch[1].replace(/,/g, ''));
+            const percentValue = Number(changeMatch[2]);
+            const sign = changeValue > 0 || percentValue > 0 ? '+' : '';
+            percent = `${sign}${percentValue.toFixed(2)}%`;
+        } else if (percentLineMatch) {
+            const percentValue = Math.abs(Number(percentLineMatch[1]));
+            const sign = trendMatch?.[1] === 'down' ? '-' : (trendMatch?.[1] === 'up' ? '+' : '');
+            percent = `${sign}${percentValue.toFixed(2)}%`;
+        }
+
+        return {
+            ...fallback,
+            price: quoteMatch ? quoteMatch[2].replace(/,/g, '') : (price ? price.replace(/,/g, '') : fallback.price),
+            percent_change: percent,
+            volume: volume || fallback.volume,
+        };
+    } catch (e) {
+        console.error(`${future.symbol} fetch error:`, e.message);
+        return fallback;
+    }
 }
 
 // ==================== RESTORED/NOT USE: HTML Parser for TW Gainers/Losers ====================
@@ -507,7 +597,7 @@ function serveHtml(res) {
 
 async function handleApiStocks(res) {
 //    console.log('Fetching stock data...');
-    const [screenerTop10, usaGHtml, usaLHtml, twnG, twnL, screenerTop8, etf0050, etf0052] = await Promise.all([
+    const [screenerTop10, usaGHtml, usaLHtml, twnG, twnL, screenerTop8, etf0050, etf0052, futureWTX] = await Promise.all([
 	    fetchUSAScreener(10),
         fetchData(URLS.usa_gainers),
         fetchData(URLS.usa_losers),
@@ -516,6 +606,7 @@ async function handleApiStocks(res) {
         fetchTaiwanScreener(8),
         fetchYahooETF(ETF_SYMBOLS['0050'].yahoo, '0050', ETF_SYMBOLS['0050'].name),
         fetchYahooETF(ETF_SYMBOLS['0052'].yahoo, '0052', ETF_SYMBOLS['0052'].name),
+        fetchYahooFuture(FUTURE_SYMBOLS.WTX),
     ]);
 
 // US Gainers/Losers with icons
@@ -536,7 +627,7 @@ async function handleApiStocks(res) {
         usa_losers:  usaLosers,
         twn_gainers: await fetchTaiwanGainers(10),     
         twn_losers:  await fetchTaiwanLosers(10),
-        twn_screener: [...screenerTop8, etf0050, etf0052],
+        twn_screener: [...screenerTop8, etf0050, etf0052, futureWTX],
     };
 
     res.writeHead(200, {

@@ -11,7 +11,7 @@ It serves a static HTML frontend and an API endpoint that returns stock data for
 - US gainers and losers from Yahoo Finance
 - US screener data from TradingView
 - Taiwan gainers and losers from TradingView
-- Taiwan screener data with `0050` and `0052` inserted at the end, from TradingView
+- Taiwan screener data with `0050`, `0052`, and `WTX&` 台指夜期 inserted at the end
 
 ## Files
 
@@ -44,6 +44,7 @@ The server currently:
 - fetches US screener data from the TradingView scanner API
 - fetches Taiwan gainers and losers from TradingView pages
 - fetches Taiwan screener data from the TradingView scanner API
+- appends `0050`, `0052`, and `WTX&` 台指夜期 after the Taiwan top 8 screener rows
 - builds TradingView chart links for each symbol
 - serves the HTML page directly from the same Node process
 
