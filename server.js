@@ -50,7 +50,7 @@ async function fetchLogoids(symbols) {
     };
 
     try {
-        const json = await fetchPost('https://scanner.tradingview.com/america/scan', body);
+        const json = await withRetry(() => fetchPost('https://scanner.tradingview.com/america/scan', body));
         const data = JSON.parse(json).data || [];
 
         const infoMap = new Map();   // symbol -> {logoid, exchange}
@@ -163,9 +163,52 @@ async function fetchPost(url, body) {
             });
         });
         req.on('error', reject);
+        req.on('timeout', () => { req.destroy(); reject(new Error(`Timeout for ${url}`)); });
         req.write(payload);
         req.end();
     });
+}
+
+// ==================== Retry Helper ====================
+async function withRetry(fn, maxRetries = 3, delayMs = 1200) {
+    let lastErr;
+    for (let attempt = 1; attempt <= maxRetries; attempt++) {
+        try {
+            return await fn();
+        } catch (e) {
+            lastErr = e;
+            if (attempt < maxRetries) {
+                console.warn(`  Retry ${attempt}/${maxRetries - 1} after error: ${e.message}`);
+                await new Promise(r => setTimeout(r, delayMs * attempt));
+            }
+        }
+    }
+    throw lastErr;
+}
+
+// ==================== Parallel Yahoo batch (concurrency=4) ====================
+async function fetchYahooBatchQuotes(yahooSymbols) {
+    const map = new Map();
+    if (!yahooSymbols || yahooSymbols.length === 0) return map;
+
+    const CONCURRENCY = 4;
+    for (let i = 0; i < yahooSymbols.length; i += CONCURRENCY) {
+        const batch = yahooSymbols.slice(i, i + CONCURRENCY).filter(Boolean);
+        const results = await Promise.allSettled(
+            batch.map(sym => fetchYahooQuote(sym).then(q => ({ sym, q })))
+        );
+        for (const r of results) {
+            if (r.status === 'fulfilled' && r.value.q) {
+                map.set(r.value.sym, r.value.q);
+            }
+        }
+        // short pause between batches to avoid rate limiting
+        if (i + CONCURRENCY < yahooSymbols.length) {
+            await new Promise(r => setTimeout(r, 400));
+        }
+    }
+    console.log(`✅Batch fetched ${map.size} Yahoo quotes (parallel 4) for absolute change`);
+    return map;
 }
 
 function formatVolume(value) {
@@ -230,13 +273,15 @@ try {
             const priceMatch = row.match(/data-testid-cell="intradayprice"[\s\S]*?>([\d,.]+)/) ||
                               row.match(/"regularMarketPrice":\s*([\d.]+)/);
 
-            const changeMatch = row.match(/data-testid="qsp-price-change"[^>]*>([-+]?[\d,.]+)/) ||
+            // Primary: Yahoo table change column cell
+            const changeMatch = row.match(/data-testid-cell="intradaypricechange"[\s\S]*?>\s*([-+]?[\d,.]+)\s*<\/span>/) ||
+                               row.match(/data-testid="qsp-price-change"[^>]*>([-+]?[\d,.]+)/) ||
                                row.match(/data-field="regularMarketChange"[^>]*>([-+]?[\d,.]+)/) ||
-                               row.match(/"regularMarketChange":\s*\{[^}]*"raw":\s*([-+]?[\d.]+)/) ||
-                               row.match(/>([+-]?[\d,]+\.?\d*)<\/span>/);
+                               row.match(/"regularMarketChange":\s*\{[^}]*"raw":\s*([-+]?[\d.]+)/);
 
-            const pctMatch = row.match(/data-testid="qsp-price-change-percent"[^>]*>\(([+-]?[\d.]+)%\)/) ||
-                            row.match(/data-testid-cell="percentchange"[\s\S]*?>([-+]?[\d,.]+)%/) ||
+            // Primary: dedicated percent column (data-testid-cell="percentchange")
+            const pctMatch = row.match(/data-testid-cell="percentchange"[\s\S]*?>\s*([-+]?[\d,.]+)%\s*<\/span>/) ||
+                            row.match(/data-testid="qsp-price-change-percent"[^>]*>\(([+-]?[\d.]+)%\)/) ||
                             row.match(/\(?([+-]?[\d.]+)%\)?/);
 
             const volMatch = row.match(/data-testid-cell="dayvolume"[\s\S]*?>([\d,.]+[KMB]?)/);
@@ -284,7 +329,7 @@ try {
 }
 
 async function fetchTaiwanScreener(count = 8) {
-    const json = await fetchPost('https://scanner.tradingview.com/taiwan/scan', {
+    const json = await withRetry(() => fetchPost('https://scanner.tradingview.com/taiwan/scan', {
         filter: [],
         options: { lang: 'zh_TW' },
         markets: ['taiwan'],
@@ -292,7 +337,7 @@ async function fetchTaiwanScreener(count = 8) {
         columns: ['name', 'description', 'close', 'change', 'change_percent', 'volume', 'logoid', 'market_cap_basic' ],
         sort: { sortBy: 'market_cap_basic', sortOrder: 'desc' },
         range: [0, count + 10],
-    });
+    }));
 
     const skipSymbols = new Set(['0050', '0052']);
     const filtered = [];
@@ -334,7 +379,7 @@ async function fetchTaiwanScreener(count = 8) {
 }
 
 async function fetchUSAScreener(count = 10) {
-    const json = await fetchPost('https://scanner.tradingview.com/america/scan', {
+    const json = await withRetry(() => fetchPost('https://scanner.tradingview.com/america/scan', {
         filter: [],
         options: { lang: 'zh_TW' },
         markets: ['america'],
@@ -342,7 +387,7 @@ async function fetchUSAScreener(count = 10) {
         columns: ['name', 'description', 'close', 'change', 'change_percent', 'volume', 'logoid', 'market_cap_basic' ],
         sort: { sortBy: 'market_cap_basic', sortOrder: 'desc' },
         range: [0, count + 10],
-    });
+    }));
 
     const skipSymbols = new Set(['GOOG', 'BRK.A', 'GGLBP', 'GOOGN']);
     const filtered = [];
@@ -501,84 +546,90 @@ async function fetchYahooQuote(yahooSymbol) {
     }
 }
 
-async function fetchYahooBatchQuotes(yahooSymbols) {
-    const map = new Map();
-    if (!yahooSymbols || yahooSymbols.length === 0) return map;
+// (fetchYahooBatchQuotes moved above fetchYahooQuote — defined earlier)
 
-    for (let i = 0; i < yahooSymbols.length; i++) {
-        const sym = yahooSymbols[i];
-        if (!sym) continue;
-        const quote = await fetchYahooQuote(sym);
-        if (quote) map.set(sym, quote);
-        // Small delay to avoid rate limiting
-        if (i < yahooSymbols.length - 1) await new Promise(r => setTimeout(r, 300));
-    }
-    console.log(`✅Batch fetched ${map.size} Yahoo quotes for absolute change`);
-    return map;
+function mapTWRows(data, yahooSymbols, yahooMap) {
+    return data.map((row, i) => {
+        const [nameZh, description, price, changeTV, changePct, volume, logoid] = row.d;
+        const name = (description && description.trim()) || 'N/A';
+        const exchange = row.s && row.s.includes(':') ? row.s.split(':')[0] : null;
+        const code = row.s ? row.s.split(':')[1] : 'N/A';
+        const yq = yahooMap.get(yahooSymbols[i]);
+        let absChange = 'N/A';
+        if (yq && yq.change != null) {
+            absChange = Number(yq.change).toFixed(2);
+        } else if (changeTV != null) {
+            absChange = Number(changeTV).toFixed(2);
+        }
+        const effectivePct = yq && yq.changePct != null ? yq.changePct :
+                             (changePct != null && !isNaN(Number(changePct)) ? changePct : changeTV);
+        return {
+            symbol: code,
+            name: name || 'N/A',
+            price: price != null ? Number(price).toFixed(2) : 'N/A',
+            change: absChange,
+            percent_change: formatPercent(effectivePct),
+            volume: formatVolume(volume),
+            icon: logoid ? `https://s3-symbol-logo.tradingview.com/${logoid}--big.svg` : '',
+            chart_url: getTradingViewChartUrl(code, true, exchange)
+        };
+    });
+}
+
+async function fetchTWScannerData(filter, sortOrder, count) {
+    const body = {
+        filter,
+        options: { lang: 'zh_TW' },
+        markets: ['taiwan'],
+        symbols: { query: { types: [] }, tickers: [] },
+        columns: ['name', 'description', 'close', 'change', 'change_percent', 'volume', 'logoid'],
+        sort: { sortBy: 'change', sortOrder },
+        range: [0, count + 10],   // extra buffer in case some are filtered
+    };
+    const json = await withRetry(() => fetchPost('https://scanner.tradingview.com/taiwan/scan', body));
+    return JSON.parse(json).data || [];
 }
 
 async function fetchTaiwanLosers(count = 10) {
-    const getLosers = async (minChange) => {
-        const body = {
-            filter: [
-                { "left": "change", "operation": "eless", "right": minChange },
-                { "left": "volume", "operation": "egreater", "right": 10000 },
-                { "left": "close", "operation": "egreater", "right": 5 },
-                { "left": "market_cap_basic", "operation": "egreater", "right": 500000000 }
-            ],
-            options: { lang: 'zh_TW' },
-            markets: ['taiwan'],
-            symbols: { query: { types: [] }, tickers: [] },
-            columns: ['name', 'description', 'close', 'change', 'change_percent', 'volume', 'logoid'],
-            sort: { sortBy: 'change', sortOrder: 'asc' },
-            range: [0, count],
-        };
+    try {
+        // Strict filter first, fallback to relaxed
+        const strictFilter = [
+            { left: 'change', operation: 'eless',   right: -3 },
+            { left: 'volume', operation: 'egreater', right: 10000 },
+            { left: 'close',  operation: 'egreater', right: 5 },
+            { left: 'market_cap_basic', operation: 'egreater', right: 500000000 }
+        ];
+        const relaxedFilter = [
+            { left: 'change', operation: 'eless',   right: 0 },
+            { left: 'volume', operation: 'egreater', right: 5000 },
+            { left: 'close',  operation: 'egreater', right: 5 },
+            { left: 'market_cap_basic', operation: 'egreater', right: 100000000 }
+        ];
 
-        const json = await fetchPost('https://scanner.tradingview.com/taiwan/scan', body);
-        const data = JSON.parse(json).data || [];
-        if (data.length === 0) return null;
+        let data = await fetchTWScannerData(strictFilter, 'asc', count);
+
+        if (data.length < count) {
+            console.log(`Taiwan Losers strict got ${data.length} < ${count}, trying relaxed filter`);
+            const relaxedData = await fetchTWScannerData(relaxedFilter, 'asc', count);
+            // merge: add relaxed rows not already in strict
+            const seenCodes = new Set(data.map(r => r.s));
+            for (const row of relaxedData) {
+                if (!seenCodes.has(row.s)) {
+                    data.push(row);
+                    seenCodes.add(row.s);
+                    if (data.length >= count) break;
+                }
+            }
+        }
+
+        data = data.slice(0, count);
+        if (data.length === 0) { console.warn('Taiwan Losers: no data after both filters'); return []; }
 
         const yahooSymbols = data.map(row => tvToYahooSymbol(row.s, true));
         const yahooMap = await fetchYahooBatchQuotes(yahooSymbols);
-
-        return data.map((row, i) => {
-            const [nameZh, description, price, changeTV, changePct, volume, logoid] = row.d;
-            const name = (description && description.trim()) || 'N/A';
-            const exchange = row.s && row.s.includes(':') ? row.s.split(':')[0] : null;
-            const code = row.s ? row.s.split(':')[1] : 'N/A';
-            const yq = yahooMap.get(yahooSymbols[i]);
-            let absChange = 'N/A';
-            if (yq && yq.change != null) {
-                absChange = Number(yq.change).toFixed(2);
-            } else if (changeTV != null) {
-                absChange = Number(changeTV).toFixed(2);
-            }
-            const effectivePct = yq && yq.changePct != null ? yq.changePct :
-                                 (changePct != null && !isNaN(Number(changePct)) ? changePct : change);
-            return {
-                symbol: code,
-                name: name || 'N/A',
-                price: price != null ? Number(price).toFixed(2) : 'N/A',
-                change: absChange,
-                percent_change: formatPercent(effectivePct),
-                volume: formatVolume(volume),
-                icon: logoid ? `https://s3-symbol-logo.tradingview.com/${logoid}--big.svg` : '',
-                chart_url: getTradingViewChartUrl(code, true, exchange)
-            };
-        });
-    };
-
-    try {
-        let result = await getLosers(-3);
-        if (!result) {
-            console.log('Taiwan Losers strict filter empty, trying relaxed filter ( < 0 )');
-            result = await getLosers(0);
-        }
-        if (result) {
-            console.log(`✅Parsed ${result.length} Taiwan Losers from Scanner API`);
-            return result;
-        }
-        return [];
+        const result = mapTWRows(data, yahooSymbols, yahooMap);
+        console.log(`✅Parsed ${result.length} Taiwan Losers from Scanner API`);
+        return result;
     } catch (e) {
         console.error('Taiwan Losers fetch error:', e.message);
         return [];
@@ -586,67 +637,43 @@ async function fetchTaiwanLosers(count = 10) {
 }
 
 async function fetchTaiwanGainers(count = 10) {
-    const getGainers = async (minChange) => {
-        const body = {
-            filter: [
-                { "left": "change", "operation": "egreater", "right": minChange },
-                { "left": "volume", "operation": "egreater", "right": 10000 },
-                { "left": "close", "operation": "egreater", "right": 5 },
-                { "left": "market_cap_basic", "operation": "egreater", "right": 500000000 }
-            ],
-            options: { lang: 'zh_TW' },
-            markets: ['taiwan'],
-            symbols: { query: { types: [] }, tickers: [] },
-            columns: ['name', 'description', 'close', 'change', 'change_percent', 'volume', 'logoid'],
-            sort: { sortBy: 'change', sortOrder: 'desc' },
-            range: [0, count],
-        };
+    try {
+        const strictFilter = [
+            { left: 'change', operation: 'egreater', right: 3 },
+            { left: 'volume', operation: 'egreater', right: 10000 },
+            { left: 'close',  operation: 'egreater', right: 5 },
+            { left: 'market_cap_basic', operation: 'egreater', right: 500000000 }
+        ];
+        const relaxedFilter = [
+            { left: 'change', operation: 'egreater', right: 0 },
+            { left: 'volume', operation: 'egreater', right: 5000 },
+            { left: 'close',  operation: 'egreater', right: 5 },
+            { left: 'market_cap_basic', operation: 'egreater', right: 100000000 }
+        ];
 
-        const json = await fetchPost('https://scanner.tradingview.com/taiwan/scan', body);
-        const data = JSON.parse(json).data || [];
-        if (data.length === 0) return null;
+        let data = await fetchTWScannerData(strictFilter, 'desc', count);
+
+        if (data.length < count) {
+            console.log(`Taiwan Gainers strict got ${data.length} < ${count}, trying relaxed filter`);
+            const relaxedData = await fetchTWScannerData(relaxedFilter, 'desc', count);
+            const seenCodes = new Set(data.map(r => r.s));
+            for (const row of relaxedData) {
+                if (!seenCodes.has(row.s)) {
+                    data.push(row);
+                    seenCodes.add(row.s);
+                    if (data.length >= count) break;
+                }
+            }
+        }
+
+        data = data.slice(0, count);
+        if (data.length === 0) { console.warn('Taiwan Gainers: no data after both filters'); return []; }
 
         const yahooSymbols = data.map(row => tvToYahooSymbol(row.s, true));
         const yahooMap = await fetchYahooBatchQuotes(yahooSymbols);
-
-        return data.map((row, i) => {
-            const [nameZh, description, price, changeTV, changePct, volume, logoid] = row.d;
-            const name = (description && description.trim()) || 'N/A';
-            const exchange = row.s && row.s.includes(':') ? row.s.split(':')[0] : null;
-            const code = row.s ? row.s.split(':')[1] : 'N/A';
-            const yq = yahooMap.get(yahooSymbols[i]);
-            let absChange = 'N/A';
-            if (yq && yq.change != null) {
-                absChange = Number(yq.change).toFixed(2);
-            } else if (changeTV != null) {
-                absChange = Number(changeTV).toFixed(2);
-            }
-            const effectivePct = yq && yq.changePct != null ? yq.changePct :
-                                 (changePct != null && !isNaN(Number(changePct)) ? changePct : change);
-            return {
-                symbol: code,
-                name: name || 'N/A',
-                price: price != null ? Number(price).toFixed(2) : 'N/A',
-                change: absChange,
-                percent_change: formatPercent(effectivePct),
-                volume: formatVolume(volume),
-                icon: logoid ? `https://s3-symbol-logo.tradingview.com/${logoid}--big.svg` : '',
-                chart_url: getTradingViewChartUrl(code, true, exchange)
-            };
-        });
-    };
-
-    try {
-        let result = await getGainers(3);
-        if (!result) {
-            console.log('Taiwan Gainers strict filter empty, trying relaxed filter ( > 0 )');
-            result = await getGainers(0);
-        }
-        if (result) {
-            console.log(`✅Parsed ${result.length} Taiwan Gainers from Scanner API`);
-            return result;
-        }
-        return [];
+        const result = mapTWRows(data, yahooSymbols, yahooMap);
+        console.log(`✅Parsed ${result.length} Taiwan Gainers from Scanner API`);
+        return result;
     } catch (e) {
         console.error('Taiwan Gainers fetch error:', e.message);
         return [];
@@ -678,36 +705,53 @@ function serveHtml(res) {
 }
 
 async function handleApiStocks(res) {
-    const [screenerTop10, usaGHtml, usaLHtml, screenerTop8, etf0050, etf0052, futureWTX, twnGainers, twnLosers] = await Promise.all([
-        fetchUSAScreener(10),
-        fetchData(URLS.usa_gainers),
-        fetchData(URLS.usa_losers),
-        fetchTaiwanScreener(8),
-        fetchYahooETF(ETF_SYMBOLS['0050'].yahoo, '0050', ETF_SYMBOLS['0050'].name),
-        fetchYahooETF(ETF_SYMBOLS['0052'].yahoo, '0052', ETF_SYMBOLS['0052'].name),
-        fetchYahooFuture(FUTURE_SYMBOLS.WTX),
-        fetchTaiwanGainers(10),
-        fetchTaiwanLosers(10),
-    ]);
+    // 90-second hard timeout so the response never hangs
+    const TIMEOUT_MS = 90000;
+    const timeoutPromise = new Promise((_, reject) =>
+        setTimeout(() => reject(new Error('handleApiStocks timed out after 90s')), TIMEOUT_MS)
+    );
 
-    const tempGainers = parseUSPage(usaGHtml);
-    const tempLosers = parseUSPage(usaLHtml);
-    const [gainerLogos, loserLogos] = await Promise.all([
-        fetchLogoids(tempGainers.map(s => s.symbol)),
-        fetchLogoids(tempLosers.map(s => s.symbol))
-    ]);
+    async function doFetch() {
+        const [screenerTop10, usaGHtml, usaLHtml, screenerTop8, etf0050, etf0052, futureWTX, twnGainers, twnLosers] = await Promise.all([
+            fetchUSAScreener(10).catch(e => { console.error('fetchUSAScreener:', e.message); return []; }),
+            withRetry(() => fetchData(URLS.usa_gainers)).catch(e => { console.error('usa_gainers:', e.message); return ''; }),
+            withRetry(() => fetchData(URLS.usa_losers)).catch(e => { console.error('usa_losers:', e.message); return ''; }),
+            fetchTaiwanScreener(8).catch(e => { console.error('fetchTaiwanScreener:', e.message); return []; }),
+            fetchYahooETF(ETF_SYMBOLS['0050'].yahoo, '0050', ETF_SYMBOLS['0050'].name).catch(() => null),
+            fetchYahooETF(ETF_SYMBOLS['0052'].yahoo, '0052', ETF_SYMBOLS['0052'].name).catch(() => null),
+            fetchYahooFuture(FUTURE_SYMBOLS.WTX).catch(() => null),
+            fetchTaiwanGainers(10),
+            fetchTaiwanLosers(10),
+        ]);
 
-    const usaGainers = parseUSPage(usaGHtml, gainerLogos);
-    const usaLosers = parseUSPage(usaLHtml, loserLogos);
+        const tempGainers = usaGHtml ? parseUSPage(usaGHtml) : [];
+        const tempLosers = usaLHtml ? parseUSPage(usaLHtml) : [];
+        const [gainerLogos, loserLogos] = await Promise.all([
+            fetchLogoids(tempGainers.map(s => s.symbol)).catch(() => new Map()),
+            fetchLogoids(tempLosers.map(s => s.symbol)).catch(() => new Map())
+        ]);
 
-    const data = {
-        usa_screener: [...screenerTop10],
-        usa_gainers: usaGainers,
-        usa_losers:  usaLosers,
-        twn_gainers: twnGainers,
-        twn_losers:  twnLosers,
-        twn_screener: [...screenerTop8, etf0050, etf0052, futureWTX],
-    };
+        const usaGainers = usaGHtml ? parseUSPage(usaGHtml, gainerLogos) : [];
+        const usaLosers  = usaLHtml ? parseUSPage(usaLHtml, loserLogos)  : [];
+
+        const twn_screener = [
+            ...screenerTop8,
+            ...(etf0050 ? [etf0050] : []),
+            ...(etf0052 ? [etf0052] : []),
+            ...(futureWTX ? [futureWTX] : []),
+        ];
+
+        return {
+            usa_screener: [...screenerTop10],
+            usa_gainers: usaGainers,
+            usa_losers:  usaLosers,
+            twn_gainers: twnGainers,
+            twn_losers:  twnLosers,
+            twn_screener,
+        };
+    }
+
+    const data = await Promise.race([doFetch(), timeoutPromise]);
 
     res.writeHead(200, {
         'Content-Type': 'application/json',
