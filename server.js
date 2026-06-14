@@ -52,7 +52,7 @@ async function fetchLogoids(symbols) {
     try {
         const json = await fetchPost('https://scanner.tradingview.com/america/scan', body);
         const data = JSON.parse(json).data || [];
-        
+
         const infoMap = new Map();   // symbol -> {logoid, exchange}
 
         for (const row of data) {
@@ -60,7 +60,7 @@ async function fetchLogoids(symbols) {
                 const fullSymbol = row.s;
                 const logoid = row.d[0];
                 const [exchange, cleanSymbol] = fullSymbol.split(':');
-                
+
                 if (cleanSymbol) {
                     infoMap.set(cleanSymbol.toUpperCase(), {
                         logoid: logoid,
@@ -69,7 +69,7 @@ async function fetchLogoids(symbols) {
                 }
             }
         }
-        
+
         console.log(` Fetched ${infoMap.size} stock info (logoid + exchange)`);
         return infoMap;
     } catch (e) {
@@ -77,7 +77,6 @@ async function fetchLogoids(symbols) {
         return new Map();
     }
 }
-
 
 
 function getTradingViewChartUrl(symbol, isTaiwan = false, exchangeInfo = null) {
@@ -214,7 +213,7 @@ function getLineValue(lines, label) {
 
 // Parse Yahoo Finance HTML table (matches page volume e.g. 21.257M, not API rounded 22.29M)
 function parseUSPage(html, logoMap = new Map()) {
-    try {
+try {
         const stocks = [];
         const rowRegex = /<tr[^>]*data-testid-row[^>]*>([\s\S]*?)<\/tr>/gi;
         let rowMatch;
@@ -224,46 +223,58 @@ function parseUSPage(html, logoMap = new Map()) {
             const symMatch = row.match(/class="symbol[^"]*"[^>]*>([A-Z0-9.]+)/);
             if (!symMatch) continue;
 
-			const symbol = symMatch[1].trim().toUpperCase();   // Force uppercase
+            const symbol = symMatch[1].trim().toUpperCase();
 
             const nameMatch = row.match(/data-testid-cell="companyshortname\.raw"[^>]*>[\s\S]*?<div[^>]*>([^<]+)/);
-            const priceMatch = row.match(/data-testid-cell="intradayprice"[^>]*>[\s\S]*?>([\d,.]+)/);
-            const pctMatch = row.match(/data-testid-cell="percentchange"[^>]*>[\s\S]*?>([-+]?\d+\.\d+)%/);
-            const volMatch = row.match(/data-testid-cell="dayvolume"[^>]*>[\s\S]*?>([\d,.]+[KMB]?)\s*</);
 
-            let percent = pctMatch ? pctMatch[1] + '%' : 'N/A';
+            const priceMatch = row.match(/data-testid-cell="intradayprice"[\s\S]*?>([\d,.]+)/) ||
+                              row.match(/"regularMarketPrice":\s*([\d.]+)/);
+
+            const changeMatch = row.match(/data-testid="qsp-price-change"[^>]*>([-+]?[\d,.]+)/) ||
+                               row.match(/data-field="regularMarketChange"[^>]*>([-+]?[\d,.]+)/) ||
+                               row.match(/"regularMarketChange":\s*\{[^}]*"raw":\s*([-+]?[\d.]+)/) ||
+                               row.match(/>([+-]?[\d,]+\.?\d*)<\/span>/);
+
+            const pctMatch = row.match(/data-testid="qsp-price-change-percent"[^>]*>\(([+-]?[\d.]+)%\)/) ||
+                            row.match(/data-testid-cell="percentchange"[\s\S]*?>([-+]?[\d,.]+)%/) ||
+                            row.match(/\(?([+-]?[\d.]+)%\)?/);
+
+            const volMatch = row.match(/data-testid-cell="dayvolume"[\s\S]*?>([\d,.]+[KMB]?)/);
+
+				let changeStr = changeMatch ? changeMatch[1].replace(/,/g, '') : 'N/A';
+				let percent = pctMatch ? pctMatch[1] + '%' : 'N/A';
             if (percent !== 'N/A' && !percent.startsWith('+') && !percent.startsWith('-')) {
                 percent = '+' + percent;
             }
-		
-			const logoInfo = logoMap.get(symbol);
-			const logoid = logoInfo && typeof logoInfo === 'object' ? logoInfo.logoid : logoInfo;
-			let icon = '';
 
-			if (logoid) {
-				icon = `https://s3-symbol-logo.tradingview.com/${logoid}--big.svg`;
-			} else {
-			// Try common slug patterns as final fallback
-				const slug = symbol.toLowerCase()
-					.replace(/[^a-z0-9]/g, '-')
-					.replace(/-+/g, '-');
-				icon = `https://s3-symbol-logo.tradingview.com/${slug}--big.svg`;
-			}
- 
-			stocks.push({
+            const logoInfo = logoMap.get(symbol);
+            const logoid = logoInfo && typeof logoInfo === 'object' ? logoInfo.logoid : logoInfo;
+            let icon = '';
+
+            if (logoid) {
+                icon = `https://s3-symbol-logo.tradingview.com/${logoid}--big.svg`;
+            } else {
+                const slug = symbol.toLowerCase()
+                    .replace(/[^a-z0-9]/g, '-')
+                    .replace(/-+/g, '-');
+                icon = `https://s3-symbol-logo.tradingview.com/${slug}--big.svg`;
+            }
+
+            stocks.push({
                 symbol,
                 name: nameMatch ? nameMatch[1].trim() : 'N/A',
                 price: priceMatch ? priceMatch[1].replace(/,/g, '') : 'N/A',
+                change: changeStr,
                 percent_change: percent,
                 volume: volMatch ? volMatch[1].trim() : 'N/A',
                 icon,
-				chart_url: getTradingViewChartUrl(symbol, false, logoMap)
+                chart_url: getTradingViewChartUrl(symbol, false, logoMap)
             });
         }
 
         console.log(`✅Parsed ${stocks.length} US stocks from Yahoo with icons`);
         if (stocks.length === 0) {
-            return [{ symbol: 'N/A', name: '解析失敗', price: 'N/A', percent_change: 'N/A', volume: 'N/A', icon: '' }];
+            return [{ symbol: 'N/A', name: '解析失敗', price: 'N/A', change: 'N/A', percent_change: 'N/A', volume: 'N/A', icon: '' }];
         }
         return stocks;
     } catch (e) {
@@ -272,73 +283,101 @@ function parseUSPage(html, logoMap = new Map()) {
     }
 }
 
-// Same data source as https://tw.tradingview.com/screener/ (scanner API)
-// need: (2330,2454,2308,2317,3711,2383,2303,3037) sort by market capitalization/市場資本 desc
 async function fetchTaiwanScreener(count = 8) {
-const json = await fetchPost('https://scanner.tradingview.com/taiwan/scan', {
+    const json = await fetchPost('https://scanner.tradingview.com/taiwan/scan', {
         filter: [],
         options: { lang: 'zh_TW' },
         markets: ['taiwan'],
         symbols: { query: { types: [] }, tickers: [] },
-        columns: ['name', 'description', 'close', 'change', 'volume', 'logoid', 'market_cap_basic' ],
+        columns: ['name', 'description', 'close', 'change', 'change_percent', 'volume', 'logoid', 'market_cap_basic' ],
         sort: { sortBy: 'market_cap_basic', sortOrder: 'desc' },
         range: [0, count + 10],
     });
 
     const skipSymbols = new Set(['0050', '0052']);
-    const stocks = [];
+    const filtered = [];
     for (const row of JSON.parse(json).data || []) {
-        const [symbol, nameZh, price, changePct, volume, logoid, marketCap] = row.d;
-        const code = String(symbol);
+        const code = row.s ? row.s.split(':')[1] : 'N/A';
         if (skipSymbols.has(code)) continue;
-        const exchange = row.s && row.s.includes(':') ? row.s.split(':')[0] : null;
+        filtered.push(row);
+        if (filtered.length >= count) break;
+    }
 
-        stocks.push({
+    // Get absolute change from Yahoo using individual chart APIs
+    const yahooSymbols = filtered.map(r => tvToYahooSymbol(r.s, true));
+    const yahooMap = await fetchYahooBatchQuotes(yahooSymbols);
+    const quotes = yahooSymbols.map(s => yahooMap.get(s));
+
+
+    const stocks = filtered.map((row, i) => {
+        const [symbolTV, nameZh, price, changePctTV, absChangeTV, volume, logoid] = row.d;
+        const code = row.s ? row.s.split(':')[1] : 'N/A';
+        const exchange = row.s && row.s.includes(':') ? row.s.split(':')[0] : null;
+        const yq = quotes[i];
+        const absChange = yq && yq.change != null ? yq.change : (absChangeTV != null ? Number(absChangeTV).toFixed(2) : 'N/A');
+        const effectivePct = yq && yq.changePct != null ? yq.changePct :
+                             (changePctTV != null && !isNaN(Number(changePctTV)) ? changePctTV : 'N/A');
+        return {
             symbol: code,
             name: nameZh || 'N/A',
             price: price != null ? Number(price).toFixed(2) : 'N/A',
-            percent_change: formatPercent(changePct),
+            change: absChange,
+            percent_change: formatPercent(effectivePct),
             volume: formatVolume(volume),
             icon: logoid ? `https://s3-symbol-logo.tradingview.com/${logoid}--big.svg` : '',
-			chart_url: getTradingViewChartUrl(code, true, exchange)
-        });
-        if (stocks.length >= count) break;
-    }
+            chart_url: getTradingViewChartUrl(code, true, exchange)
+        };
+    });
 
     console.log(`✅Parsed ${stocks.length} Taiwan screener stocks (zh_TW names + logoid icons)`);
     return stocks;
 }
 
 async function fetchUSAScreener(count = 10) {
-const json = await fetchPost('https://scanner.tradingview.com/america/scan', {
+    const json = await fetchPost('https://scanner.tradingview.com/america/scan', {
         filter: [],
         options: { lang: 'zh_TW' },
         markets: ['america'],
         symbols: { query: { types: [] }, tickers: [] },
-        columns: ['name', 'description', 'close', 'change', 'volume', 'logoid', 'market_cap_basic' ],
+        columns: ['name', 'description', 'close', 'change', 'change_percent', 'volume', 'logoid', 'market_cap_basic' ],
         sort: { sortBy: 'market_cap_basic', sortOrder: 'desc' },
         range: [0, count + 10],
     });
 
-    const skipSymbols = new Set(['GOOG', 'BRK.A', 'GGLBP']);
-    const stocks = [];
+    const skipSymbols = new Set(['GOOG', 'BRK.A', 'GGLBP', 'GOOGN']);
+    const filtered = [];
     for (const row of JSON.parse(json).data || []) {
-        const [symbol, nameZh, price, changePct, volume, logoid, marketCap] = row.d;
-        const code = String(symbol);
+        const code = row.s ? row.s.split(':')[1] : 'N/A';
         if (skipSymbols.has(code)) continue;
-        const exchange = row.s && row.s.includes(':') ? row.s.split(':')[0] : null;
+        filtered.push(row);
+        if (filtered.length >= count) break;
+    }
 
-        stocks.push({
+    // Get absolute change from Yahoo using individual chart APIs
+    const yahooSymbols = filtered.map(r => tvToYahooSymbol(r.s, false));
+    const yahooMap = await fetchYahooBatchQuotes(yahooSymbols);
+    const quotes = yahooSymbols.map(s => yahooMap.get(s));
+
+
+    const stocks = filtered.map((row, i) => {
+        const [symbolTV, nameZh, price, changePctTV, absChangeTV, volume, logoid] = row.d;
+        const code = row.s ? row.s.split(':')[1] : 'N/A';
+        const exchange = row.s && row.s.includes(':') ? row.s.split(':')[0] : null;
+        const yq = quotes[i];
+        const absChange = yq && yq.change != null ? yq.change : (absChangeTV != null ? Number(absChangeTV).toFixed(2) : 'N/A');
+        const effectivePct = yq && yq.changePct != null ? yq.changePct :
+                             (changePctTV != null && !isNaN(Number(changePctTV)) ? changePctTV : 'N/A');
+        return {
             symbol: code,
             name: nameZh || 'N/A',
             price: price != null ? Number(price).toFixed(2) : 'N/A',
-            percent_change: formatPercent(changePct),
+            change: absChange,
+            percent_change: formatPercent(effectivePct),
             volume: formatVolume(volume),
             icon: logoid ? `https://s3-symbol-logo.tradingview.com/${logoid}--big.svg` : '',
-			chart_url: getTradingViewChartUrl(code, false, exchange)
-        });
-        if (stocks.length >= count) break;
-    }
+            chart_url: getTradingViewChartUrl(code, false, exchange)
+        };
+    });
 
     console.log(`✅Parsed ${stocks.length} USA screener stocks (zh_TW names + logoid icons)`);
     return stocks;
@@ -349,28 +388,31 @@ async function fetchYahooETF(yahooSymbol, displaySymbol, displayName) {
     const json = await fetchData(url);
     const meta = JSON.parse(json)?.chart?.result?.[0]?.meta;
     if (!meta) {
-        return { symbol: displaySymbol, 
-		name: displayName, 
-		price: 'N/A', 
-		percent_change: 'N/A', 
-		volume: 'N/A', 
-		icon: '', 
-		chart_url: getTradingViewChartUrl(displaySymbol, true)
-		};
+        return { symbol: displaySymbol,
+            name: displayName,
+            price: 'N/A',
+            change: 'N/A',
+            percent_change: 'N/A',
+            volume: 'N/A',
+            icon: '',
+            chart_url: getTradingViewChartUrl(displaySymbol, true)
+            };
     }
 
     const price = meta.regularMarketPrice;
     const prev = meta.chartPreviousClose;
-    const changePct = prev ? ((price - prev) / prev) * 100 : null;
+    const changeValue = price - prev;
+    const changePct = prev ? (changeValue / prev) * 100 : null;
 
     return {
         symbol: displaySymbol,
         name: displayName,
         price: price != null ? Number(price).toFixed(2) : 'N/A',
+        change: price != null && prev != null ? (price - prev).toFixed(2) : 'N/A',
         percent_change: formatPercent(changePct),
         volume: formatVolume(meta.regularMarketVolume),
-        icon: '', // 0050/0052: blank icon slot in HTML
-		chart_url: getTradingViewChartUrl(displaySymbol, true)
+        icon: '',
+        chart_url: getTradingViewChartUrl(displaySymbol, true)
     };
 }
 
@@ -379,6 +421,7 @@ async function fetchYahooFuture(future) {
         symbol: future.symbol,
         name: future.name,
         price: 'N/A',
+        change: 'N/A',
         percent_change: 'N/A',
         volume: 'N/A',
         icon: '',
@@ -397,7 +440,7 @@ async function fetchYahooFuture(future) {
         const changeLine = searchLines.find(line => /^[-+]?\d{1,3}(,\d{3})*(\.\d+)?\([-+]?\d+(\.\d+)?%\)$/.test(line));
         const changeMatch = changeLine && changeLine.match(/^([-+]?\d{1,3}(?:,\d{3})*(?:\.\d+)?)\(([-+]?\d+(?:\.\d+)?)%\)$/);
         const percentLine = searchLines.find(line => /^\([-+]?\d+(\.\d+)?%\)$/.test(line));
-        const percentLineMatch = percentLine && percentLine.match(/^\(([-+]?\d+(?:\.\d+)?)%\)$/);
+        const percentLineMatch = percentLine && percentLine.match(/^\(([-+]?\d+(\.\d+)?)%\)$/);
         const volume = getLineValue(lines, '總量');
 
         let percent = 'N/A';
@@ -420,6 +463,7 @@ async function fetchYahooFuture(future) {
         return {
             ...fallback,
             price: quoteMatch ? quoteMatch[2].replace(/,/g, '') : (price ? price.replace(/,/g, '') : fallback.price),
+            change: quoteMatch ? quoteMatch[3].replace(/,/g, '') : (changeMatch ? changeMatch[1].replace(/,/g, '') : 'N/A'),
             percent_change: percent,
             volume: volume || fallback.volume,
         };
@@ -429,100 +473,112 @@ async function fetchYahooFuture(future) {
     }
 }
 
-// ==================== RESTORED/NOT USE: HTML Parser for TW Gainers/Losers ====================
-function parseTradingView(html, isLoser = false) {
+// Convert TradingView full symbol to Yahoo Finance symbol
+function tvToYahooSymbol(tvFullSymbol, isTaiwan = false) {
+    const parts = (tvFullSymbol || '').split(':');
+    const code = parts[1];
+    if (!code) return null;
+    if (isTaiwan) return parts[0] === 'TPEX' ? `${code}.TWO` : `${code}.TW`;
+    return code;
+}
+
+async function fetchYahooQuote(yahooSymbol) {
     try {
-		// Try new method first - look for data in script tags or JSON
-        // const dataMatch = html.match(/window\.__INITIAL_STATE__.*?=\s*({[\s\S]*?});/);
-        // if (dataMatch) {
-            // Advanced parsing if needed in future
-        // }
+        const url = `https://finance.yahoo.com/quote/${yahooSymbol}`;
+        const html = await fetchData(url);
 
-        // Current working method (updated regex)
-        const symMatch = html.match(/"symbols":\[([^\]]+)\]/);
-        if (!symMatch) {
-            console.warn("TradingView symbols not found, trying fallback...");
-            return [];
-        }
+        const changeMatch = html.match(/data-testid="qsp-price-change"[^>]*>([-+]?[\d,.]+)/);
+        const pctMatch = html.match(/data-testid="qsp-price-change-percent"[^>]*>\(([+-]?[\d.]+)%\)/);
 
-        const symbols = JSON.parse('[' + symMatch[1] + ']');
+        if (!changeMatch || !pctMatch) return null;
 
-        const getSection = (id) => {
-            const marker = `"id":"${id}","rawValues":`;
-            const idx = html.indexOf(marker);
-            if (idx === -1) return [];
-            const start = html.indexOf('[', idx);
-            let end = start, depth = 0;
-            for (let i = start; i < html.length; i++) {
-                if (html[i] === '[' || html[i] === '{') depth++;
-                if (html[i] === ']' || html[i] === '}') depth--;
-                if (depth === 0) { end = i + 1; break; }
-            }
-            try { return JSON.parse(html.substring(start, end)); } catch { return []; }
+        return {
+            change: changeMatch[1].replace(/,/g, ''),
+            changePct: pctMatch[1]
         };
-
-        const tickers = getSection('TickerUniversal');
-        const prices = getSection('Price');
-        const changes = getSection('Change');
-        const volumes = getSection('Volume');
-
-        const stocks = symbols.slice(0, 10).map((sym, i) => {
-            const t = tickers[i] || {};
-            return {
-                symbol: t.name || sym.split(':')[1] || sym,
-                name: t.description || 'N/A',
-                price: prices[i] !== undefined ? Number(prices[i]).toFixed(2) : 'N/A',
-                percent_change: changes[i] !== undefined ? formatPercent(changes[i]) : 'N/A',
-                volume: volumes[i] !== undefined ? formatVolume(volumes[i]) : 'N/A',
-                icon: t.logoid ? `https://s3-symbol-logo.tradingview.com/${t.logoid}--big.svg` : '',
-            };
-        });
-
-        console.log(`✅Parsed ${stocks.length} Taiwan stocks from HTML`);
-        return stocks;
     } catch (e) {
-        console.error('TradingView parse error:', e.message);
-        return [];
+        return null;
     }
 }
 
-// Use TradingView Scanner API - Much more reliable
+async function fetchYahooBatchQuotes(yahooSymbols) {
+    const map = new Map();
+    if (!yahooSymbols || yahooSymbols.length === 0) return map;
+
+    for (let i = 0; i < yahooSymbols.length; i++) {
+        const sym = yahooSymbols[i];
+        if (!sym) continue;
+        const quote = await fetchYahooQuote(sym);
+        if (quote) map.set(sym, quote);
+        // Small delay to avoid rate limiting
+        if (i < yahooSymbols.length - 1) await new Promise(r => setTimeout(r, 300));
+    }
+    console.log(`✅Batch fetched ${map.size} Yahoo quotes for absolute change`);
+    return map;
+}
+
 async function fetchTaiwanLosers(count = 10) {
-    const body = {
-filter: [
-            { "left": "change", "operation": "eless", "right": -3 },
-            { "left": "volume", "operation": "egreater", "right": 10000 },
-            { "left": "close", "operation": "egreater", "right": 5 },
-			{ "left": "market_cap_basic", "operation": "egreater", "right": 500000000 } // >500M TWD
-        ],
-        options: { lang: 'zh_TW' },
-        markets: ['taiwan'],
-        symbols: { query: { types: [] }, tickers: [] },
-        columns: ['name', 'description', 'close', 'change', 'volume', 'logoid'],
-        sort: { sortBy: 'change', sortOrder: 'asc' },
-        range: [0, count],
+    const getLosers = async (minChange) => {
+        const body = {
+            filter: [
+                { "left": "change", "operation": "eless", "right": minChange },
+                { "left": "volume", "operation": "egreater", "right": 10000 },
+                { "left": "close", "operation": "egreater", "right": 5 },
+                { "left": "market_cap_basic", "operation": "egreater", "right": 500000000 }
+            ],
+            options: { lang: 'zh_TW' },
+            markets: ['taiwan'],
+            symbols: { query: { types: [] }, tickers: [] },
+            columns: ['name', 'description', 'close', 'change', 'change_percent', 'volume', 'logoid'],
+            sort: { sortBy: 'change', sortOrder: 'asc' },
+            range: [0, count],
+        };
+
+        const json = await fetchPost('https://scanner.tradingview.com/taiwan/scan', body);
+        const data = JSON.parse(json).data || [];
+        if (data.length === 0) return null;
+
+        const yahooSymbols = data.map(row => tvToYahooSymbol(row.s, true));
+        const yahooMap = await fetchYahooBatchQuotes(yahooSymbols);
+
+        return data.map((row, i) => {
+            const [nameZh, description, price, changeTV, changePct, volume, logoid] = row.d;
+            const name = (description && description.trim()) || 'N/A';
+            const exchange = row.s && row.s.includes(':') ? row.s.split(':')[0] : null;
+            const code = row.s ? row.s.split(':')[1] : 'N/A';
+            const yq = yahooMap.get(yahooSymbols[i]);
+            let absChange = 'N/A';
+            if (yq && yq.change != null) {
+                absChange = Number(yq.change).toFixed(2);
+            } else if (changeTV != null) {
+                absChange = Number(changeTV).toFixed(2);
+            }
+            const effectivePct = yq && yq.changePct != null ? yq.changePct :
+                                 (changePct != null && !isNaN(Number(changePct)) ? changePct : change);
+            return {
+                symbol: code,
+                name: name || 'N/A',
+                price: price != null ? Number(price).toFixed(2) : 'N/A',
+                change: absChange,
+                percent_change: formatPercent(effectivePct),
+                volume: formatVolume(volume),
+                icon: logoid ? `https://s3-symbol-logo.tradingview.com/${logoid}--big.svg` : '',
+                chart_url: getTradingViewChartUrl(code, true, exchange)
+            };
+        });
     };
 
     try {
-        const json = await fetchPost('https://scanner.tradingview.com/taiwan/scan', body);
-        const data = JSON.parse(json).data || [];
-
-        const stocks = data.map(row => {
-            const [symbol, nameZh, price, changePct, volume, logoid] = row.d;
-            const exchange = row.s && row.s.includes(':') ? row.s.split(':')[0] : null;
-            return {
-                symbol: String(symbol),
-                name: nameZh || 'N/A',
-                price: price != null ? Number(price).toFixed(2) : 'N/A',
-                percent_change: formatPercent(changePct),
-                volume: formatVolume(volume),
-                icon: logoid ? `https://s3-symbol-logo.tradingview.com/${logoid}--big.svg` : '',
-				chart_url: getTradingViewChartUrl(String(symbol), true, exchange)
-            };
-        });
-
-        console.log(`✅Parsed ${stocks.length} Taiwan Losers from Scanner API`);
-        return stocks;
+        let result = await getLosers(-3);
+        if (!result) {
+            console.log('Taiwan Losers strict filter empty, trying relaxed filter ( < 0 )');
+            result = await getLosers(0);
+        }
+        if (result) {
+            console.log(`✅Parsed ${result.length} Taiwan Losers from Scanner API`);
+            return result;
+        }
+        return [];
     } catch (e) {
         console.error('Taiwan Losers fetch error:', e.message);
         return [];
@@ -530,41 +586,67 @@ filter: [
 }
 
 async function fetchTaiwanGainers(count = 10) {
-    const body = {
-filter: [
-            { "left": "change", "operation": "egreater", "right": 3 },           // stronger change
-            { "left": "volume", "operation": "egreater", "right": 10000 },      // decent volume
-            { "left": "close", "operation": "egreater", "right": 5 },
-            { "left": "market_cap_basic", "operation": "egreater", "right": 500000000 } // >500M TWD
-        ],
-        options: { lang: 'zh_TW' },
-        markets: ['taiwan'],
-        symbols: { query: { types: [] }, tickers: [] },
-        columns: ['name', 'description', 'close', 'change', 'volume', 'logoid'],
-        sort: { sortBy: 'change', sortOrder: 'desc' },
-        range: [0, count],
+    const getGainers = async (minChange) => {
+        const body = {
+            filter: [
+                { "left": "change", "operation": "egreater", "right": minChange },
+                { "left": "volume", "operation": "egreater", "right": 10000 },
+                { "left": "close", "operation": "egreater", "right": 5 },
+                { "left": "market_cap_basic", "operation": "egreater", "right": 500000000 }
+            ],
+            options: { lang: 'zh_TW' },
+            markets: ['taiwan'],
+            symbols: { query: { types: [] }, tickers: [] },
+            columns: ['name', 'description', 'close', 'change', 'change_percent', 'volume', 'logoid'],
+            sort: { sortBy: 'change', sortOrder: 'desc' },
+            range: [0, count],
+        };
+
+        const json = await fetchPost('https://scanner.tradingview.com/taiwan/scan', body);
+        const data = JSON.parse(json).data || [];
+        if (data.length === 0) return null;
+
+        const yahooSymbols = data.map(row => tvToYahooSymbol(row.s, true));
+        const yahooMap = await fetchYahooBatchQuotes(yahooSymbols);
+
+        return data.map((row, i) => {
+            const [nameZh, description, price, changeTV, changePct, volume, logoid] = row.d;
+            const name = (description && description.trim()) || 'N/A';
+            const exchange = row.s && row.s.includes(':') ? row.s.split(':')[0] : null;
+            const code = row.s ? row.s.split(':')[1] : 'N/A';
+            const yq = yahooMap.get(yahooSymbols[i]);
+            let absChange = 'N/A';
+            if (yq && yq.change != null) {
+                absChange = Number(yq.change).toFixed(2);
+            } else if (changeTV != null) {
+                absChange = Number(changeTV).toFixed(2);
+            }
+            const effectivePct = yq && yq.changePct != null ? yq.changePct :
+                                 (changePct != null && !isNaN(Number(changePct)) ? changePct : change);
+            return {
+                symbol: code,
+                name: name || 'N/A',
+                price: price != null ? Number(price).toFixed(2) : 'N/A',
+                change: absChange,
+                percent_change: formatPercent(effectivePct),
+                volume: formatVolume(volume),
+                icon: logoid ? `https://s3-symbol-logo.tradingview.com/${logoid}--big.svg` : '',
+                chart_url: getTradingViewChartUrl(code, true, exchange)
+            };
+        });
     };
 
     try {
-        const json = await fetchPost('https://scanner.tradingview.com/taiwan/scan', body);
-        const data = JSON.parse(json).data || [];
-
-        const stocks = data.map(row => {
-            const [symbol, nameZh, price, changePct, volume, logoid] = row.d;
-            const exchange = row.s && row.s.includes(':') ? row.s.split(':')[0] : null;
-            return {
-                symbol: String(symbol),
-                name: nameZh || 'N/A',
-                price: price != null ? Number(price).toFixed(2) : 'N/A',
-                percent_change: formatPercent(changePct),
-                volume: formatVolume(volume),
-                icon: logoid ? `https://s3-symbol-logo.tradingview.com/${logoid}--big.svg` : '',
-				chart_url: getTradingViewChartUrl(String(symbol), true, exchange)
-            };
-        });
-
-        console.log(`✅Parsed ${stocks.length} Taiwan Gainers from Scanner API`);
-        return stocks;
+        let result = await getGainers(3);
+        if (!result) {
+            console.log('Taiwan Gainers strict filter empty, trying relaxed filter ( > 0 )');
+            result = await getGainers(0);
+        }
+        if (result) {
+            console.log(`✅Parsed ${result.length} Taiwan Gainers from Scanner API`);
+            return result;
+        }
+        return [];
     } catch (e) {
         console.error('Taiwan Gainers fetch error:', e.message);
         return [];
@@ -596,20 +678,18 @@ function serveHtml(res) {
 }
 
 async function handleApiStocks(res) {
-//    console.log('Fetching stock data...');
-    const [screenerTop10, usaGHtml, usaLHtml, twnG, twnL, screenerTop8, etf0050, etf0052, futureWTX] = await Promise.all([
-	    fetchUSAScreener(10),
+    const [screenerTop10, usaGHtml, usaLHtml, screenerTop8, etf0050, etf0052, futureWTX, twnGainers, twnLosers] = await Promise.all([
+        fetchUSAScreener(10),
         fetchData(URLS.usa_gainers),
         fetchData(URLS.usa_losers),
-        fetchData(URLS.twn_gainers),
-        fetchData(URLS.twn_losers),
         fetchTaiwanScreener(8),
         fetchYahooETF(ETF_SYMBOLS['0050'].yahoo, '0050', ETF_SYMBOLS['0050'].name),
         fetchYahooETF(ETF_SYMBOLS['0052'].yahoo, '0052', ETF_SYMBOLS['0052'].name),
         fetchYahooFuture(FUTURE_SYMBOLS.WTX),
+        fetchTaiwanGainers(10),
+        fetchTaiwanLosers(10),
     ]);
 
-// US Gainers/Losers with icons
     const tempGainers = parseUSPage(usaGHtml);
     const tempLosers = parseUSPage(usaLHtml);
     const [gainerLogos, loserLogos] = await Promise.all([
@@ -617,16 +697,15 @@ async function handleApiStocks(res) {
         fetchLogoids(tempLosers.map(s => s.symbol))
     ]);
 
-    // Final parse with icons
     const usaGainers = parseUSPage(usaGHtml, gainerLogos);
     const usaLosers = parseUSPage(usaLHtml, loserLogos);
-	
+
     const data = {
-		usa_screener: [...screenerTop10],
+        usa_screener: [...screenerTop10],
         usa_gainers: usaGainers,
         usa_losers:  usaLosers,
-        twn_gainers: await fetchTaiwanGainers(10),     
-        twn_losers:  await fetchTaiwanLosers(10),
+        twn_gainers: twnGainers,
+        twn_losers:  twnLosers,
         twn_screener: [...screenerTop8, etf0050, etf0052, futureWTX],
     };
 

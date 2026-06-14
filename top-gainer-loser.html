@@ -112,6 +112,9 @@
             font-size: 0.95em;
         }
 
+        .change-pos { color: #4ade80; font-weight: bold; }
+        .change-neg { color: #f87171; font-weight: bold; }
+
         .gainer .change-pct {
             background-color: #22c55e;
             color: white;
@@ -153,21 +156,21 @@
             <h3>Top 8 市值股票 + ETF 0050/0052 + 台指夜期</h3>
             <a href="https://tw.tradingview.com/screener/" target="_blank">TradingView 市值排行</a>
             <table id="twn-screener-table">
-                <thead><tr><th>股票</th><th>名稱</th><th>價格</th><th>漲跌 %</th><th>成交量</th></tr></thead>
+                <thead><tr><th>股票</th><th>名稱</th><th>價格</th><th>漲跌</th><th>漲跌 %</th><th>成交量</th></tr></thead>
                 <tbody></tbody>
             </table>
 
             <h3 style="margin-top: 30px;">Top 10 Gainers</h3>
             <a href="https://tw.tradingview.com/markets/stocks-taiwan/market-movers-gainers/" target="_blank">TradingView Gainers</a>
             <table id="twn-gainers-table">
-                <thead><tr><th>股票</th><th>名稱</th><th>價格</th><th>漲跌 %</th><th>成交量</th></tr></thead>
+                <thead><tr><th>股票</th><th>名稱</th><th>價格</th><th>漲跌</th><th>漲跌 %</th><th>成交量</th></tr></thead>
                 <tbody></tbody>
             </table>
 
             <h3 style="margin-top: 30px;">Top 10 Losers</h3>
             <a href="https://tw.tradingview.com/markets/stocks-taiwan/market-movers-losers/" target="_blank">TradingView Losers</a>
             <table id="twn-losers-table">
-                <thead><tr><th>股票</th><th>名稱</th><th>價格</th><th>漲跌 %</th><th>成交量</th></tr></thead>
+                <thead><tr><th>股票</th><th>名稱</th><th>價格</th><th>漲跌</th><th>漲跌 %</th><th>成交量</th></tr></thead>
                 <tbody></tbody>
             </table>
         </div>
@@ -179,21 +182,21 @@
             <h3>Top 10 市值股票</h3>
             <a href="https://tradingview.com/screener/" target="_blank">TradingView 市值排行</a>
             <table id="usa-screener-table">
-                <thead><tr><th>Symbol</th><th>Name</th><th>價格</th><th>漲跌 %</th><th>成交量</th></tr></thead>
+                <thead><tr><th>Symbol</th><th>Name</th><th>價格</th><th>漲跌</th><th>漲跌 %</th><th>成交量</th></tr></thead>
                 <tbody></tbody>
             </table>
 
             <h3 style="margin-top: 30px;">Top 10 Gainers</h3>
             <a href="https://finance.yahoo.com/markets/stocks/gainers/" target="_blank">Yahoo Gainers</a>
             <table id="usa-gainers-table">
-                <thead><tr><th>Symbol</th><th>Name</th><th>價格</th><th>漲跌 %</th><th>成交量</th></tr></thead>
+                <thead><tr><th>Symbol</th><th>Name</th><th>價格</th><th>漲跌</th><th>漲跌 %</th><th>成交量</th></tr></thead>
                 <tbody></tbody>
             </table>
 
             <h3 style="margin-top: 30px;">Top 10 Losers</h3>
             <a href="https://finance.yahoo.com/markets/stocks/losers/" target="_blank">Yahoo Losers</a>
             <table id="usa-losers-table">
-                <thead><tr><th>Symbol</th><th>Name</th><th>價格</th><th>漲跌 %</th><th>成交量</th></tr></thead>
+                <thead><tr><th>Symbol</th><th>Name</th><th>價格</th><th>漲跌</th><th>漲跌 %</th><th>成交量</th></tr></thead>
                 <tbody></tbody>
             </table>
         </div>
@@ -245,7 +248,7 @@
             tbody.innerHTML = '';
 
             if (!stocks || stocks.length === 0) {
-                tbody.innerHTML = `<tr><td colspan="5" style="text-align:center; padding:20px;">無法取得資料</td></tr>`;
+                tbody.innerHTML = `<tr><td colspan="6" style="text-align:center; padding:20px;">無法取得資料</td></tr>`;
                 return;
             }
 
@@ -261,10 +264,18 @@
                     ? `<img src="${stock.icon}" class="stock-icon" alt="" onerror="this.outerHTML='<span class=\\'stock-icon-spacer\\'></span>'">` 
                     : `<span class="stock-icon-spacer"></span>`;
 
+                const changeNum = parseFloat(stock.change);
+                const isValidChange = stock.change !== 'N/A' && !isNaN(changeNum);
+                const changeDisplay = isValidChange
+                    ? (changeNum >= 0 && !String(stock.change).startsWith('+') ? '+' : '') + stock.change
+                    : (stock.change || 'N/A');
+                const changeClass = isValidChange ? (changeNum >= 0 ? 'change-pos' : 'change-neg') : '';
+
                 row.innerHTML = `
                     <td><span class="symbol-cell">${iconHtml}<strong class="symbol"><a href="${stock.chart_url || '#'}" target="_blank" rel="noopener noreferrer" style="color: inherit; text-decoration: none;">${stock.symbol}</a></strong></span></td>
                     <td class="name">${stock.name}</td>
                     <td class="price">${stock.price}</td>
+                    <td class="${changeClass}">${changeDisplay}</td>
                     <td><span class="change-pct">${stock.percent_change}</span></td>
                     <td class="volume">${stock.volume}</td>
                 `;
@@ -272,10 +283,10 @@
             });
         }
 
-<!-- refresh interval 60000 (60s) -->
+<!-- refresh interval 300000 (5m) -->
         document.addEventListener('DOMContentLoaded', () => {
             fetchStockData();
-            setInterval(fetchStockData, 60000);
+            setInterval(fetchStockData, 300000);
         });
     </script>
 </body>
